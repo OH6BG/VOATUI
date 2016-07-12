@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: latin-1 -*-
 
-'''
-
-VOATUI.PY - VOACAP text-based User Interface.
-(c) Jari Perkiömäki OH6BG 
-
-26 Jun 2016: Small change in handling voaInFile & voaOutFile 
-25 Jun 2016: Initial release.
-
-Requires voacapl from Jim Watson: http://www.qsl.net/hz1jw/voacapl/index.html
-
-'''
-
 def drawLine( len, char ):
     print(''.ljust(len, char))
 
@@ -146,7 +134,7 @@ voaOutFile = os.path.join(os.path.expanduser('~'), 'itshfbc', 'run', 'voatui.out
 os.system("clear")
 
 print("Welcome to the VOACAP text-based User Interface!")
-print("by Jari Perkiömäki OH6BG (www.voacap.com)")
+print("by Jari PerkiÃ¶mÃ¤ki OH6BG (www.voacap.com)")
 drawLine(80,".")
 
 ssnFile = os.path.join(os.path.expanduser('~'), 'itshfbc', 'ssn.txt')
