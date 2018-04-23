@@ -1,3 +1,4 @@
+23 Apr 2018: Total refactoring, using voacapl 0.7.4
 12 Jul 2016: Moved to GitHub for further re-factoring
 26 Jun 2016: Small change in handling voaInFile & voaOutFile 
 25 Jun 2016: Initial release.
