@@ -8,7 +8,7 @@ VOATUI.PY - VOACAP text-based User Interface, v2
 
 CHANGELOG:
 
-22 Apr 2018: Total refactoring, using voacapl 0.7.4
+23 Apr 2018: Total refactoring, using voacapl 0.7.4
 26 Jun 2016: Small change in handling voaInFile & voaOutFile 
 25 Jun 2016: Initial release.
 
