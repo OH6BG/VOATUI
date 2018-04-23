@@ -448,7 +448,7 @@ if __name__ == '__main__':
     while len(mo) < 1:
 
         # you can enter many different months at the same time, e.g. 1 4 9 12
-		# 0 means all months from Jan to Dec
+	# 0 means all months from Jan to Dec
         mo = input("Enter month number (0..12) [0 = all]: ").split()
         mo = [int(x) for x in mo if x.isdigit()]
         mo = list(set(mo))
