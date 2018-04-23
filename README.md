@@ -1,6 +1,6 @@
 # VOATUI
-Text-based User Interface for voacapl (Python)
+Text-based User Interface for voacapl (Python), version 2
 
-This is the intial version of a text-based user interface for running voacapl, the *nix/Linux version of VOACAP. The code needs some serious re-factoring.
+This is a completely refactored of the initial version of voatui.py.
 
-This Python script requires voacapl from Jim Watson: http://www.qsl.net/hz1jw/voacapl/index.html
+This Python script requires voacapl 0.7.4 from Jim Watson: https://github.com/jawatson/voacapl
