@@ -34,7 +34,7 @@ def hour_line():
     return a
 
 
-def band(x: int):
+def band(x):
 
     b = [80, 60, 40, 30, 20, 17, 15, 12, 10]
     return str(b[x - 1])
