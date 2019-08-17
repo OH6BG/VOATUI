@@ -45,7 +45,7 @@ def hour_freq(h, f):
     r = REL[h][f]
     s = SDBW[h][f]
 
-    if r == 0.00 and s >= -167:
+    if r == 0.00 and s >= -164:
         return " * "
     return col(r)
 
@@ -74,7 +74,10 @@ def create_prediction_graph():
 
     month, year, sunspot = X[0], X[1], X[4].rstrip(".")
     txlat, txlon, rxlat, rxlon, deg, km, mi = \
-        Y[0] + Y[1], Y[2] + Y[3], Y[5] + Y[6], Y[7] + Y[8],\
+        Y[0] + Y[1],\
+        Y[2] + Y[3],\
+        Y[5] + Y[6],\
+        Y[7] + Y[8],\
         round(float(Y[9]) + 0.5),\
         round(float(Y[12]) + 0.5),\
         round(float(Y[12]) * 0.62137 + 0.5)
@@ -448,7 +451,7 @@ if __name__ == '__main__':
     while len(mo) < 1:
 
         # you can enter many different months at the same time, e.g. 1 4 9 12
-	# 0 means all months from Jan to Dec
+        # 0 means all months from Jan to Dec
         mo = input("Enter month number (0..12) [0 = all]: ").split()
         mo = [int(x) for x in mo if x.isdigit()]
         mo = list(set(mo))
