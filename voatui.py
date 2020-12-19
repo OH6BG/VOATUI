@@ -1,37 +1,40 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 """
 
-VOATUI.PY - VOACAP text-based User Interface, v2
-(c) 2018 Jari Perkiömäki OH6BG
+VOATUI.PY - VOACAP Point-to-Point predictions, text-based User Interface.
+(c) Jari Perkiömäki OH6BG
 
 CHANGELOG:
 
-23 Apr 2018: Total refactoring, using voacapl 0.7.4
-26 Jun 2016: Small change in handling voaInFile & voaOutFile 
+19 Dec 2020: Version 3: Major refactoring, enhanced Best Frequency analysis
+12 Apr 2018: Version 2: Total refactoring, using voacapl 0.7.3
+26 Jun 2016: Small change in handling voaInFile & voaOutFile
 25 Jun 2016: Initial release.
 
-Requires voacapl 0.7.4 from Jim Watson: https://github.com/jawatson/voacapl
+Requires voacapl from Jim Watson:
+http://www.qsl.net/hz1jw/voacapl/index.html
+https://github.com/jawatson/voacapl
 
 """
 
 import datetime
-import os
+from itertools import islice
+from pathlib import Path
+import shlex
+import struct
+import subprocess
 import sys
 import urllib.request
 import uuid
-from pathlib import Path
+
+
+def zeropad(x):
+    return f"{x:02}"
 
 
 def hour_line():
-
-    a = ''
-    for i in range(1, 25):
-        a += "|%02d" % i
-        if i == 24:
-            a += " |"
-    return a
+    return f'|{"|".join(list(map(zeropad, range(1,25))))} |'
 
 
 def band(x):
@@ -42,12 +45,23 @@ def band(x):
 
 def hour_freq(h, f):
 
-    r = REL[h][f]
-    s = SDBW[h][f]
+    r = float(REL[h][f])
+    s = float(DBW[h][f])
 
     if r == 0.00 and s >= -164:
         return " * "
     return col(r)
+
+
+def get_rem(snr, rel, sdbw):
+    if snr < 0:
+        return '-'
+    elif rel < 0.1 and sdbw >= -164:
+        return '+'
+    elif rel >= 0.1 and sdbw <= -164:
+        return '*'
+
+    return ''
 
 
 def col(y):
@@ -70,55 +84,57 @@ def col(y):
         return " ? "
 
 
-def create_prediction_graph():
+def create_prediction_graph(file):
 
-    month, year, sunspot = X[0], X[1], X[4].rstrip(".")
-    txlat, txlon, rxlat, rxlon, deg, km, mi = \
-        Y[0] + Y[1],\
-        Y[2] + Y[3],\
-        Y[5] + Y[6],\
-        Y[7] + Y[8],\
-        round(float(Y[9]) + 0.5),\
-        round(float(Y[12]) + 0.5),\
-        round(float(Y[12]) * 0.62137 + 0.5)
-    pwr = Z[-1]
-    db = float(W[-2])
+    res = "\n"
+    with open(file, "r") as voaf:
+
+        head = voaf.readlines()[80:86]
+        voaf.seek(0)
+
+        for line in voaf:
+            if line.endswith("REL   \n"):
+                REL.append(line.split()[1:10])
+            if line.endswith("S DBW \n"):
+                al = ''
+                for i in range(6, 56, 5):
+                    al += line[i:i + 5] + " "
+                DBW.append(al.split()[1:10])
+
+    x = head[0].split()
+    y = head[2].split()
+    z = head[3].split()
+    w = head[5].split()
+    month, year, ssn = x[0], x[1], x[4].rstrip(".")
+    tlat, tlon, rlat, rlon, deg, km, mi = y[0] + y[1], y[2] + y[3], y[5] + y[6], y[7] + y[8], \
+        round(float(y[9]) + 0.5), \
+        round(float(y[12]) + 0.5), \
+        round(float(y[12]) * 0.62137 + 0.5)
+    pwr = z[-1]
+    db = float(w[-2])
+
+    path = "Long-Path" if "<Long>" in head[1] else "Short-Path"
 
     mode_dict = {'CW': 19.0, 'SSB': 38.0, 'AM': 48.0, 'FT8': 13.0, 'WSPR': 3.0}
-    mode = list(mode_dict.keys())[list(mode_dict.values()).index(db)]
+    # swap mode dictionary
+    mode = {value:key for key, value in mode_dict.items()}
 
-    res = "\nVOACAP Prediction via " + PATH + ". " + month + " " + str(year) +\
-          ": SSN " + str(sunspot) + ". Power = " + pwr + ", " + mode + "\n"
-    res += "TX (" + txlat + ", " + txlon + ") to RX (" + rxlat + ", " + rxlon + "): " +\
-           str(km) + " km, " + str(mi) + " mi, " + str(deg) + " deg\n\n"
-    res += "  %s\n" % hour_line()
+    res += (f"VOACAP Prediction via {path}. {month} {year}: SSN {ssn}. Power={pwr}, {mode[db]}\n"
+            f"TX ({tlat}, {tlon}) to RX ({rlat}, {rlon}): {km} km, {mi} mi, {deg} deg\n\n"
+            f"  {hour_line()}\n")
 
     for n in range(9, 0, -1):
+        res += f"{band(n)}|"
+        for j in range(0, 24):
+            res += hour_freq(j, n - 1)
+        res += f"|{band(n)}\n"
 
-        res += "%s|" % band(n)
-        for j in range(1, 25):
-            res += hour_freq(j, n-1)
-        res += "|%s\n" % band(n)
-
-    res += "  %s\n\n" % hour_line()
-    res += "A = 90 - 100%   d = 25 - 49%  * = REL 0%, but Signal Power over Noise\n"
-    res += "B = 75 -  89%   e = 10 - 24%\n"
-    res += "C = 50 -  74%   f =  1 -  9%\n"
+    res += (f"  {hour_line()}\n\n"
+            "A = 90 - 100%   d = 25 - 49%  * = REL 0%, but Signal Power over Noise\n"
+            "B = 75 -  89%   e = 10 - 24%\n"
+            "C = 50 -  74%   f =  1 -  9%\n")
 
     return res
-
-
-def list_compare(a, b):
-
-    for i in range(3):
-        if not a[i][1] == b[i][1]:
-            return i, a[i][1], b[i][1]
-
-
-def print_frequencies(a):
-
-    _, f = zip(*a)
-    return list(f)
 
 
 def s_meter(sig):
@@ -149,300 +165,334 @@ def s_meter(sig):
     return "--"
 
 
-def assess_best_freq():
+def assess_best_freq(in_file):
 
-    rel3 = {}
-    sdbw3 = {}
-    snr3 = {}
+    freq, h, i, a = [], [], 0, ''
+    mufday, sdbw, snr, snrxx, snrup, rel, siglw, sigup, method_nine = {}, {}, {}, {}, {}, {}, {}, {}, {}
+    col_format = '11s5s5s5s5s5s5s5s5s5s5s5s8s'
+    muf_format = '64s4s6s6s7s'
 
-    a = "The best operating frequencies (FREQ, FREQ2, FREQ3) by hour\n\n"
-    a += "UTC".ljust(2) + \
-         "SDBW".rjust(8) + \
-         "REL".rjust(10) + \
-         "SNR".rjust(8) + \
-         "MUFday".rjust(9) + \
-         "FOT".rjust(8) + \
-         "MUF".rjust(8) + \
-         "HPF".rjust(8) + \
-         "FREQ".rjust(8) + \
-         "FREQ2".rjust(8) + \
-         "FREQ3".rjust(8) + \
-         "\n\n"
+    with in_file.open(mode='rb') as lines:
+
+        for hour in list(islice(lines, 41, 65)):
+            _, gmt, muf, fot, hpf = struct.unpack(muf_format, hour)
+            hh, *mfh = list(map(float, (gmt, muf, fot, hpf)))
+            method_nine[int(hh)] = mfh
+
+        for y in lines:
+            if y.endswith(b"FREQ\n"):
+                z = y.split()
+                i = int(float(z[0]))
+                if not freq:
+                    z = z[2:-1]
+                    while z[-1] == b'0.0':
+                        del z[-1]
+                    freq = list(map(float, z))
+            else:
+                try:
+                    d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, parameter = struct.unpack(col_format, y)
+                except:
+                    continue
+
+                if parameter.decode().strip() == 'S DBW':
+                    sdbw[i] = list(map(int, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                elif parameter.decode().strip() == 'REL':
+                    rel[i] = list(map(float, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                elif parameter.decode().strip() == 'SNR':
+                    snr[i] = list(map(int, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                elif parameter.decode().strip() == 'MUFday':
+                    mufday[i] = list(map(float, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                elif parameter.decode().strip() == 'SIG LW':
+                    siglw[i] = list(map(float, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                elif parameter.decode().strip() == 'SIG UP':
+                    sigup[i] = list(map(float, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                elif parameter.decode().strip() == 'SNRxx':
+                    snrxx[i] = list(map(int, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                elif parameter.decode().strip() == 'SNR UP':
+                    snrup[i] = list(map(float, (d2, d3, d4, d5, d6, d7, d8, d9, d10)))
+                else:
+                    continue
+
+    a += ("The best operating frequencies (FREQ1, FREQ2, FREQ3) by hour\n\n"
+          f"{'UTC':<2}"
+          f"{'SDBW':>8}"
+          f"{'ΔSIG':>10}"
+          f"{'REL':>7}"
+          f"{'SNR':>6}"
+          f"{'ΔSNR':>7}"
+          f"{'MUFday':>8}"
+          f"{'FOT':>8}"
+          f"{'MUF':>8}"
+          f"{'HPF':>8}"
+          f"{'FREQ1':>8}"
+          f"{'FREQ2':>8}"
+          f"{'FREQ3':>8}\n\n")
 
     for t in range(1, 25):
+        sig_rem, snr_rem = '', ''
+        sig = sorted(list(zip(sdbw[t], freq)), reverse=True)[:3]
+        sn = sorted(list(zip(snr[t], freq)), reverse=True)[:3]
+        r = sorted(list(zip(rel[t], freq)), reverse=True)[:3]
+        muf, fot, hpf = method_nine[t]
+        pri, sec, ter = list(zip(*sig))[1]
+        muf_t = mufday[t][freq.index(pri)]
+        rel_t = rel[t][freq.index(pri)]
+        sig_t = sig[0][0]
+        sigup_t = sigup[t][freq.index(pri)]
+        siglw_t = siglw[t][freq.index(pri)]
+        snr_t = snr[t][freq.index(pri)]
+        snr90_t = snrxx[t][freq.index(pri)]
+        snrup_t = snrup[t][freq.index(pri)]
+        rem1 = get_rem(sn[0][0], r[0][0], sig[0][0])
+        rem2 = get_rem(sn[1][0], r[1][0], sig[1][0])
+        rem3 = get_rem(sn[2][0], r[2][0], sig[2][0])
+        sm = f"{sig_t} ({s_meter(sig_t):<3})"
 
-        rel3[t] = sorted(zip(REL[t], FREQ), reverse=True)[:3]
-        sdbw3[t] = sorted(zip(SDBW[t], FREQ), reverse=True)[:3]
-        snr3[t] = sorted(zip(SNR[t], FREQ), reverse=True)[:3]
+        delta_sig = (sig_t + sigup_t) - (sig_t - siglw_t)
+        delta_sig = f"{delta_sig:.1f}"
+        if float(delta_sig) >= 47:
+            sig_rem = '*'
 
-        if list_compare(rel3[t], sdbw3[t]):
+        delta_snr = (snr_t + snrup_t) - snr90_t
+        delta_snr = f"{delta_snr:.1f}"
+        if float(delta_snr) >= 47:
+            snr_rem = '*'
 
-            item, rel_fq, sdbw_fq = list_compare(rel3[t], sdbw3[t])
-            if item == 2:
-                fqs = print_frequencies(rel3[t])
-                fqs[item] = sdbw_fq
-            else:
-                fqs = print_frequencies(sdbw3[t])
-
-        else:
-            fqs = print_frequencies(rel3[t])
-
-        fot = METHOD_NINE[t][1]
-        hpf = METHOD_NINE[t][2]
-
-        pri, sec, ter = fqs
-        muf = MUFDAY[t][FREQ.index(pri)]
-        sig = SDBW[t][FREQ.index(pri)]
-        rel1 = REL[t][FREQ.index(pri)]
-        snr1 = SNR[t][FREQ.index(pri)]
-
-        if snr3[t][0][0] < 0:
-            rem = '-'
-        elif rel3[t][0][0] < 0.1 and sdbw3[t][0][0] >= -164:
-            rem = '+'
-        elif rel3[t][0][0] < 0.1 and sdbw3[t][0][0] <= -164:
-            rem = '*'
-        else:
-            rem = ''
-
-        signal = str(sig) + " (" + s_meter(sig).ljust(3) + ")"
-
-        a += "{0}{1}{2}%{3}{4}%{5}{6}{7}{8}{9}{10}{11}\n".format(str(t).rjust(2, '0'),
-                                                                 signal.rjust(12),
-                                                                 str(int(rel1 * 100)).rjust(6),
-                                                                 str(snr1).rjust(8),
-                                                                 str(int(muf * 100)).rjust(8),
-                                                                 str(fot).rjust(8),
-                                                                 str(MUFFREQ[t]).rjust(8),
-                                                                 str(hpf).rjust(8),
-                                                                 str(pri).rjust(8),
-                                                                 rem.ljust(1),
-                                                                 str(sec).rjust(7),
-                                                                 str(ter).rjust(8)
-                                                                 )
+        a += (f"{t:>02}"
+              f"{sm:>12}"
+              f"{delta_sig:>7}"
+              f"{sig_rem:<1}"
+              f"{int(rel_t * 100):>5}%"
+              f"{snr_t:>6}"
+              f"{delta_snr:>7}"
+              f"{snr_rem:<1}"
+              f"{int(muf_t * 100):>6}%"
+              f"{fot:>8}"
+              f"{muf:>8}"
+              f"{hpf:>8}"
+              f"{pri:>8}"
+              f"{rem1:<1}"
+              f"{sec:>7}"
+              f"{rem2:<1}"
+              f"{ter:>7}"
+              f"{rem3:<1}\n")
 
     return a
 
 
 def create_input_file(yr, mo, ssn, txlat, txlon, rxlat, rxlon, txmode, power, path=0):
 
-    mo = "%.2f" % float(mo)
-    ssn = "%.1f" % ssn
+    mo = f"{float(mo):.2f}"
+    ssn = f"{ssn:.1f}"
 
-    txlat = "%.2f" % txlat
+    txlat = f"{txlat:.2f}"
     if float(txlat) < 0:
         txlat = txlat.lstrip('-') + "S"
     else:
         txlat += "N"
 
-    txlon = "%.2f" % txlon
+    txlon = f"{txlon:.2f}"
     if float(txlon) < 0:
         txlon = txlon.lstrip('-') + "W"
     else:
         txlon += "E"
 
-    rxlat = "%.2f" % rxlat
+    rxlat = f"{rxlat:.2f}"
     if float(rxlat) < 0:
         rxlat = rxlat.lstrip('-') + "S"
     else:
         rxlat += "N"
 
-    rxlon = "%.2f" % rxlon
+    rxlon = f"{rxlon:.2f}"
     if float(rxlon) < 0:
         rxlon = rxlon.lstrip('-') + "W"
     else:
         rxlon += "E"
 
     mode = [19.0, 38.0, 48.0, 13.0, 3.0][txmode - 1]
-    power = "%.8f" % (power * 0.0008)
+    power = f"{power * 0.0008:.4f}"
+    p = "S     0" if not path else "L     1"
 
-    if not path:
-        p = "S     0\n"
-    else:
-        p = "L     1\n"
-
-    input_file = "LINEMAX     999       number of lines-per-page\n"
-    input_file += "COEFFS    CCIR\n"
-    input_file += "TIME          1   24    1    1\n"
-    input_file += "MONTH      " + str(yr) + " " + str(mo).rjust(5) + "\n"
-    input_file += "SUNSPOT    " + str(ssn).rjust(5) + "\n"
-    input_file += "LABEL     " + "TX".ljust(20) + "RX".ljust(20) + "\n"
-    input_file += "CIRCUIT   " + txlat.rjust(6) + "   " + txlon.rjust(7) + "    " + rxlat.rjust(6) + "   " +\
-                  rxlon.rjust(7) + "  " + p
-    input_file += "SYSTEM       1. 155. 3.00  90. " + str(mode) + " 3.00 0.10\n"
-    input_file += "FPROB      1.00 1.00 1.00 0.00\n"
-    input_file += "ANTENNA       1    1    2   30     0.000[samples/sample.00    ]  0.0  " + str(power).rjust(8) + "\n"
-    input_file += "ANTENNA       2    2    2   30     0.000[samples/sample.00    ]  0.0    0.0000\n"
-    input_file += "FREQUENCY  3.60 5.30 7.1010.1014.1018.1021.1024.9028.20 0.00 0.00\n"
-    input_file += "METHOD        9    0\n"
-    input_file += "EXECUTE\n"
-    input_file += "METHOD       30    0\n"
-    input_file += "BOTLINES      5    8   10   12   21\n"
-    input_file += "TOPLINES      1    2    3    4    6\n"
-    input_file += "EXECUTE\n"
-    input_file += "QUIT\n"
+    input_file = ("LINEMAX     999       number of lines-per-page\n"
+                  "COEFFS    CCIR\n"
+                  "TIME          1   24    1    1\n"
+                  f"MONTH      {yr}{mo:>5}\n"
+                  f"SUNSPOT    {ssn:>5}\n"
+                  f"LABEL     {'TX':<20}{'RX':<20}\n"
+                  f"CIRCUIT   {txlat:>6}   {txlon:>7}    {rxlat:>6}   {rxlon:>7}  {p}\n"
+                  f"SYSTEM       1. 153. 3.00  90. {mode} 3.00 0.10\n"
+                  "FPROB      1.00 1.00 1.00 0.00\n"
+                  f"ANTENNA       1    1    2   30     0.000[samples/sample.00    ]  0.0  {power:>8}\n"
+                  "ANTENNA       2    2    2   30     0.000[samples/sample.00    ]  0.0    0.0000\n"
+                  "FREQUENCY  3.60 5.36 7.1010.1014.1018.1021.1024.9028.20 0.00 0.00\n"
+                  "METHOD        9    0\n"
+                  "EXECUTE\n"
+                  "METHOD       30    0\n"
+                  "EXECUTE\n"
+                  "QUIT\n")
 
     return input_file
 
 
+def to_loc(maiden):
+
+    assert isinstance(maiden, str), 'Maidenhead is a string'
+    maiden = maiden.strip().upper()
+
+    N = len(maiden)
+    assert 8 >= N >= 2 and N % 2 == 0, 'Maidenhead locator requires 2-8 characters, even number of characters'
+
+    O = ord('A')
+    lon = -180
+    lat = -90
+
+    lon += (ord(maiden[0]) - O) * 20
+    lat += (ord(maiden[1]) - O) * 10
+
+    if N >= 4:
+        lon += int(maiden[2]) * 2
+        lat += int(maiden[3]) * 1
+    elif N >= 6:
+        lon += (ord(maiden[4]) - O) * 5./60
+        lat += (ord(maiden[5]) - O) * 2.5/60
+    elif N >= 8:
+        lon += int(maiden[6]) * 5./600
+        lat += int(maiden[7]) * 2.5/600
+
+    return lat, lon
+
+
+def to_maiden(position, precision=4):
+
+    assert len(position) == 2, 'lat lon required'
+    lat = float(position[0])
+    lon = float(position[1])
+
+    A = ord('A')
+    a = divmod(lon + 180, 20)
+    b = divmod(lat + 90, 10)
+    astring = chr(A + int(a[0])) + chr(A + int(b[0]))
+    lon = a[1] / 2.
+    lat = b[1]
+    i = 1
+
+    while i < precision:
+
+        i += 1
+        a = divmod(lon, 1)
+        b = divmod(lat, 1)
+
+        if not (i % 2):
+            astring += str(int(a[0])) + str(int(b[0]))
+            lon = 24 * a[1]
+            lat = 24 * b[1]
+        else:
+            astring += chr(A + int(a[0])) + chr(A + int(b[0]))
+            lon = 10 * a[1]
+            lat = 10 * b[1]
+
+    if len(astring) >= 6:
+        astring = astring[:4] + astring[4:6].lower() + astring[6:]
+
+    return astring
+
+
 def get_ssn(yr, mo):
 
-    mo = "%02d" % mo
+    mo = f"{mo:02}"
     mydate = ' '.join([str(yr), mo])
 
     ssn = -1
     with open(ssnFile, "r") as ssnf:
-
         for row in ssnf:
             if mydate in row:
                 ssn = float(row.split()[4]) * 0.7
 
     if not isinstance(ssn, float):
-
-        print("Sunspot number not known for %s/%s. Exiting." % (mo, str(yr)))
-        sys.exit(1)
+        print(f"Sunspot number NOT found for {mo}/{yr}. Check SSNs from: {ssnFile}")
+        sys.exit()
 
     return ssn
 
 
 def run_prediction(yr, k, ssn, tlat, tlon, rlat, rlon, m, power, path):
 
-    global FREQ, METHOD_NINE, MUFFREQ, MUFDAY, SDBW, SNR, REL, X, Y, Z, W, PATH
-
-    FREQ = []
-    METHOD_NINE = []
-    X = []
-    Y = []
-    Z = []
-    W = []
-    MUFFREQ = {}
-    MUFDAY = {}
-    SDBW = {}
-    SNR = {}
-    REL = {}
-
     input_deck = create_input_file(yr, k, ssn, tlat, tlon, rlat, rlon, m, power, path)
 
     with open(voaInPathFile, "w") as out_file:
         print(input_deck, file=out_file)
 
-    os.system(voacaplCmd)
+    args = shlex.split(voacaplCmd)
+    try:
+        cp = subprocess.run(args, stderr=subprocess.PIPE, stdout=subprocess.PIPE, timeout=5)
+    except Exception as msg:
+        print(f"Error in subprocess: {msg}")
+        sys.exit()
 
-    FREQ, MUFFREQ, MUFDAY, SDBW, SNR, REL, X, Y, Z, W, PATH = parse_voacap_output(voaOutPathFile)
-    METHOD_NINE = parse_method_nine(voaOutPathFile)
-
-    return "{0}\n{1}".format(create_prediction_graph(), assess_best_freq())
-
-
-def parse_method_nine(in_file):
-
-    h = [0]
-    method9 = {}
-
-    with open(in_file, 'r') as f:
-
-        h.extend(f.readlines()[43:67])
-        f.seek(0)
-
-    for rb in range(1, len(h)):
-
-        bb = h[rb].split()
-        method9[rb] = [float(x) for x in bb[-3:]]
-
-    return method9
-
-
-def parse_voacap_output(file):
-
-    freq = []
-    rel = {}
-    snr = {}
-    sdbw = {}
-    mufday = {}
-    muffreq = {}
-    i = 0
-
-    with open(file, 'r') as f:
-
-        head = f.readlines()[82:87]
-        f.seek(0)
-
-        x = head[0].split()
-        y = head[2].split()
-        z = head[3].split()
-        w = head[4].split()
-
-        if "<Long>" in head[1]:
-            path = "Long-Path"
-        else:
-            path = "Short-Path"
-
-        for line in f:
-
-            if line.endswith("FREQ\n"):
-                freq_line = line.split()
-                i = int(float(freq_line[0]))
-                muffreq[i] = float(freq_line[1])
-                if not len(freq):
-                    freq = [float(x) for x in freq_line[2:11]]
-            elif line.endswith("REL   \n"):
-                rel_line = line.split()
-                rel[i] = [float(x) for x in rel_line[1:10]]
-            elif line.endswith("MUFday\n"):
-                muf_line = line.split()
-                mufday[i] = [float(x) for x in muf_line[1:10]]
-            elif line.endswith("S DBW \n"):
-                al = ''
-                for j in range(6, 56, 5):
-                    al += line[j:j + 5] + " "
-                sdbw[i] = [int(x) for x in al.split()[1:10]]
-            elif line.endswith("SNR   \n"):
-                al = ''
-                for j in range(6, 56, 5):
-                    al += line[j:j + 5] + " "
-                snr[i] = [int(x) for x in al.split()[1:10]]
-
-    return freq, muffreq, mufday, sdbw, snr, rel, x, y, z, w, path
+    return f"{create_prediction_graph(voaOutPathFile)}\n{assess_best_freq(voaOutPathFile)}"
 
 
 if __name__ == '__main__':
 
     preID = str(uuid.uuid4().fields[-1])[:8]
-    preDir = os.path.join(os.getcwd(), 'predictions', preID)
-    itshfbcDir = "/home/user/itshfbc"
-    voacaplBin = "/usr/local/bin/voacapl --run-dir=%s --absorption-mode=a -s " % preDir
-    voaInFile = preID + ".dat"
-    voaOutFile = preID + ".out"
-    voaInPathFile = os.path.join(preDir, voaInFile)
-    voaOutPathFile = os.path.join(preDir, voaOutFile)
-    voacaplCmd = voacaplBin + itshfbcDir + " " + voaInFile + " " + voaOutFile
+    preDir = Path.cwd() / 'predictions' / preID
+    itshfbcDir = Path("/root/itshfbc")
+    voacaplBin = f"/usr/local/bin/voacapl --run-dir={preDir} --absorption-mode=a -s"
+    voaInFile = f"{preID}.dat"
+    voaOutFile = f"{preID}.out"
+    voaInPathFile = preDir / voaInFile
+    voaOutPathFile = preDir /voaOutFile
 
-    print("VOACAP P2P Text, version 2")
-    print("by Jari Perkiömäki OH6BG (www.voacap.com)")
-    print('.' * 80)
+    voacaplCmd = f"{voacaplBin} {itshfbcDir} {voaInFile} {voaOutFile}"
 
-    ssnFile = os.path.join(itshfbcDir, 'ssn.txt')
-    ssnFileExists = os.path.isfile(ssnFile)
+    # set your default coordinates here
+    def_lat = 63.146
+    def_lon = 21.542
+
+    print(f"{'.' * 80}\n"
+          "VOACAP Point-to-Point Predictions, Version 3\n"
+          "by Jari Perkiömäki OH6BG (www.voacap.com)\n"
+          f"{'.' * 80}")
+
+    # Create prediction directory
+    if not preDir.exists():
+
+        try:
+            preDir.mkdir(parents=True, exist_ok=True)
+        except Exception as msg:
+            print(msg)
+            sys.exit()
+    
+    # Get recent sunspot numbers
+    ssnFile = preDir / 'ssn.txt'
     ssnUrl = "http://sidc.oma.be/silso/FORECASTS/prediML.txt"
 
-    if not ssnFileExists:
+    if not ssnFile.exists():
 
         try:
-            print('Trying to fetch the SSN data from the Internet...')
+            print('Fetching the SSN data from the Internet...')
             urllib.request.urlretrieve(ssnUrl, ssnFile)
         except Exception as msg:
-            print('Error getting SSNs: %s' % str(msg))
-            sys.exit(1)
+            print(f'Error getting SSNs: {msg}')
+            sys.exit()
 
-    print("\nPredefined values:")
-    print("TX Antenna: Isotropic, 0 dBi gain")
-    print("RX Antenna: Isotropic, 0 dBi gain\n")
+    with open(ssnFile) as f:
+        lines = f.read().splitlines()
+        fst_year, fst_month, *_ = lines[0].split()
+        lst_year, lst_month, *_ = lines[-1].split()
+    
+    print("\nPREDEFINED VALUES:\n"
+          "TX Antenna: Isotropic, 0 dBi gain\n"
+          "RX Antenna: Isotropic, 0 dBi gain\n"
+          "Min. TOA  : 3 degrees\n"
+          f"SSN dates : {fst_month}/{fst_year}..{lst_month}/{lst_year}\n"
+    )
 
     yr = 0
-    while not 2017 <= yr <= 2019:
+    while not 2020 <= yr <= 2021:
 
         try:
-            yr = int(input("Enter year (2017..2019) [%d]: " % datetime.datetime.now().year))
+            yr = int(input("Enter year (2020..2021) [%d]: " % datetime.datetime.now().year))
         except ValueError:
             yr = datetime.datetime.now().year
             break
@@ -450,41 +500,35 @@ if __name__ == '__main__':
     mo = []
     while len(mo) < 1:
 
-        # you can enter many different months at the same time, e.g. 1 4 9 12
-        # 0 means all months from Jan to Dec
-        mo = input("Enter month number (0..12) [0 = all]: ").split()
+        mo = input("Enter month number (1..12): ").split()
         mo = [int(x) for x in mo if x.isdigit()]
         mo = list(set(mo))
-        mo = sorted([x for x in mo if 0 <= x <= 12])
+        mo = sorted([x for x in mo if 1 <= x <= 12])
+        mo = list(range(1, 13)) if not mo else mo
 
-    if 0 in mo:
-        mo = list(range(1, 13))
-
-    print("\nTRANSMITTER (TX)")
-    print('-' * 16)
+    print("\nTRANSMITTER (TX)\n"
+    f"{'.' * 16}")
 
     tlat = -99
     while not -90 <= tlat <= 90:
 
         try:
-            tlat = float(input("Enter latitude (-90..90) [1.0]: "))
+            tlat = float(input("Enter latitude (-90..90) [63.146]: "))
         except ValueError:
-            # set your own default latitude here
-            tlat = 1.0
+            tlat = def_lat
             break
 
     tlon = -199
     while not -180 <= tlon <= 180:
 
         try:
-            tlon = float(input("Enter longitude (-180..180) [-1.0]: "))
+            tlon = float(input("Enter longitude (-180..180) [21.542]: "))
         except ValueError:
-            # set your own default longitude here
-            tlon = -1.0
+            tlon = def_lon
             break
 
-    print("\nRECEIVER (RX)")
-    print('-' * 16)
+    print("\nRECEIVER (RX)\n"
+    f"{'.' * 16}")
 
     rlat = -99
     while not -90 <= rlat <= 90:
@@ -503,10 +547,10 @@ if __name__ == '__main__':
             continue
 
     power = 0
-    while not 0.01 <= power <= 5000:
+    while not 1 <= power <= 5000:
 
         try:
-            power = float(input("\nEnter power in Watts (0.01..5000) [1500]: "))
+            power = float(input("\nEnter power in Watts (1..5000) [1500]: "))
         except ValueError:
             power = 1500
             break
@@ -520,21 +564,15 @@ if __name__ == '__main__':
             m = 1
             break
 
-    if not os.path.exists(preDir):
-
-        try:
-            os.makedirs(preDir)
-        except Exception as msg:
-            print(str(msg))
-            sys.exit(1)
-
-    for _, k in enumerate(mo):
+    for k in mo:
 
         ssn = get_ssn(yr, k)
+        REL, DBW = [], []
         print(run_prediction(yr, k, ssn, tlat, tlon, rlat, rlon, m, power, 0))
+        REL, DBW = [], []
         print(run_prediction(yr, k, ssn, tlat, tlon, rlat, rlon, m, power, 1))
 
-    for p in Path(preDir).glob("*.dat"):
+    for p in preDir.glob("*.dat"):
         p.unlink()
 
-    print("The result directory:", preDir)
+    print(f"Prediction directory: {preDir}")
